@@ -51,6 +51,12 @@ static int connect_to(const char *ip, uint16_t port) {
     return fd;
 }
 
+static void put_cell(int oy, int ox, uint8_t x, uint8_t y, char ch) {
+    int sx = ox + (int)x * 2;
+    int sy = oy + (int)y;
+    mvaddch(sy, sx, ch);
+    mvaddch(sy, sx + 1, ' '); }
+
 static int do_join(int fd, uint32_t *out_id) {
     if (send_msg(fd, MSG_JOIN, NULL, 0) != 0) return -1;
 
@@ -103,12 +109,15 @@ static void send_dir(client_t *C, uint8_t dir) {
     (void)send_msg(C->fd, MSG_INPUT, &in, sizeof(in));
 }
 
-static void send_quit(client_t *C) {
+static void send_action(client_t *C, uint8_t action) {
     input_t in;
     in.dir = 255;
-    in.action = ACT_QUIT;
-    (void)send_msg(C->fd, MSG_INPUT, &in, sizeof(in));
+    in.action = action;
+    send_msg(C->fd, MSG_INPUT, &in, sizeof(in));
 }
+
+
+
 
 static char snake_head_char(int idx, int is_me) {
     if (is_me) return '@';
@@ -123,27 +132,27 @@ static void draw(const state_t *st, uint32_t my_id) {
              st->round_over ? " (ROUND OVER)" : "");
 
     int ox = 1, oy = 2;
-    for (int x = 0; x < st->w + 2; x++) {
+    int W = (int)st->w * 2;
+    int H = (int)st->h;
+
+    for (int x = 0; x < W + 2; x++) {
         mvaddch(oy - 1, ox + x - 1, '#');
-        mvaddch(oy + st->h, ox + x - 1, '#');
+        mvaddch(oy + H, ox + x - 1, '#');
     }
-    for (int y = 0; y < st->h; y++) {
+    for (int y = 0; y < H; y++) {
         mvaddch(oy + y, ox - 1, '#');
-        mvaddch(oy + y, ox + st->w, '#');
+        mvaddch(oy + y, ox + W, '#');
     }
 
     if (st->lobby) {
-        mvprintw(oy + st->h + 1, 0, "Waiting in lobby. On SERVER press 'g' to start");
-        mvprintw(oy + st->h + 2, 0, "Controls: arrows/WASD move, q -> quit");
-    } else if (st->round_over) {
-        mvprintw(oy + st->h + 1, 0, "All snakes dead. Press 'r' to restart round.");
-        mvprintw(oy + st->h + 2, 0, "Controls: q -> quit, r -> restart");
+        mvprintw(oy + H + 1, 0, "Waiting in lobby. Press 'g' to start.");
+        mvprintw(oy + H + 2, 0, "Controls: arrows/WASD move | g start | q quit");
     } else {
-        mvprintw(oy + st->h + 1, 0, "Controls: arrows/WASD move | q -> quit");
+        mvprintw(oy + H + 1, 0, "Controls: arrows/WASD move | q quit");
     }
 
     for (uint8_t i = 0; i < st->fruit_count; i++) {
-        mvaddch(oy + st->fruits[i].y, ox + st->fruits[i].x, 'o');
+        put_cell(oy, ox, st->fruits[i].x, st->fruits[i].y, 'o');
     }
 
     for (int i = 0; i < MAX_PLAYERS; i++) {
@@ -152,13 +161,14 @@ static void draw(const state_t *st, uint32_t my_id) {
 
         int is_me = (p->id == my_id);
 
-        mvprintw(1, 0 + i*18, " P%d id=%u %s sc=%u ", i+1, p->id, p->alive ? "ALIVE" : "DEAD ", p->score);
+        mvprintw(1, 0 + i*18, "P%d id=%u %s sc=%u",
+                 i+1, p->id, p->alive ? "ALIVE" : "DEAD ", p->score);
 
         if (!p->alive) continue;
 
         for (uint16_t k = 0; k < p->len && k < MAX_SNAKE; k++) {
             char ch = (k == 0) ? snake_head_char(i, is_me) : 'x';
-            mvaddch(oy + p->seg[k].y, ox + p->seg[k].x, ch);
+            put_cell(oy, ox, p->seg[k].x, p->seg[k].y, ch);
         }
     }
 
@@ -226,7 +236,9 @@ int main(int argc, char **argv) {
                 case 's': case 'S': send_dir(&C, DIR_DOWN); break;
                 case 'a': case 'A': send_dir(&C, DIR_LEFT); break;
                 case 'd': case 'D': send_dir(&C, DIR_RIGHT); break;
-                case 'q': case 'Q': send_quit(&C); running = 0; break;
+                case 'q': case 'Q': send_action(&C, ACT_QUIT); running = 0; break;
+                case 'g': case 'G': send_action(&C, ACT_START); break;
+                case 'r': case 'R': send_action(&C, ACT_RESTART); break;
                 default: break;
             }
         }

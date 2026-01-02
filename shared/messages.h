@@ -19,7 +19,9 @@ typedef enum {
 typedef enum {
     ACT_NONE  = 0,
     ACT_PAUSE = 1,
-    ACT_QUIT  = 2
+    ACT_QUIT  = 2,
+    ACT_START = 3,
+    ACT_RESTART = 4
 } action_t;
 
 typedef struct __attribute__((packed)) {
