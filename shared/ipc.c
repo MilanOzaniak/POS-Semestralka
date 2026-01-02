@@ -2,8 +2,6 @@
 #include "messages.h"
 
 #include <errno.h>
-#include <string.h>
-#include <sys/types.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -31,7 +29,7 @@ int recv_all(int fd, void *buf, size_t len) {
             if (errno == EINTR) continue;
             return -1;
         }
-        if (n == 0) return -1; // peer closed
+        if (n == 0) return -1; 
         recvd += (size_t)n;
     }
     return 0;
@@ -41,6 +39,7 @@ int send_msg(int fd, uint16_t type, const void *payload, uint16_t len) {
     msg_hdr_t h;
     h.type = type;
     h.len  = len;
+
     if (send_all(fd, &h, sizeof(h)) != 0) return -1;
     if (len > 0 && payload != NULL) {
         if (send_all(fd, payload, len) != 0) return -1;
@@ -55,4 +54,3 @@ int recv_hdr(int fd, uint16_t *type, uint16_t *len) {
     if (len)  *len  = h.len;
     return 0;
 }
-
