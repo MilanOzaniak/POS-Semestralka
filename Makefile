@@ -1,29 +1,30 @@
-CC = gcc
-CFLAGS = -Wall -Wextra -Werror -pedantic -std=c11 -pthread -O2 -D_POSIX_C_SOURCE=200809L
-INCLUDES = -Ishared
+CC      := gcc
+CFLAGS  := -Wall -Wextra -Werror -pedantic -std=c11 -O2 -pthread -D_POSIX_C_SOURCE=200809L
+INCS    := -Ishared -IServer -IClient
 
-SERVER_BIN = server
-CLIENT_BIN = client
+SERVER_SRCS := Server/main.c Server/server.c Server/game.c Server/map.c shared/ipc.c
+CLIENT_SRCS := Client/main.c Client/client.c Client/draw.c Client/menu.c shared/ipc.c
 
-SERVER_SRC = Server/server.c shared/ipc.c
-CLIENT_SRC = Client/client.c shared/ipc.c
-
-SERVER_OBJ = $(SERVER_SRC:.c=.o)
-CLIENT_OBJ = $(CLIENT_SRC:.c=.o)
+SERVER_OBJS := $(SERVER_SRCS:.c=.o)
+CLIENT_OBJS := $(CLIENT_SRCS:.c=.o)
 
 all: server client
 
-server: $(SERVER_OBJ)
-	$(CC) $(CFLAGS) -o $(SERVER_BIN) $(SERVER_OBJ)
+server: server_bin
 
-client: $(CLIENT_OBJ)
-	$(CC) $(CFLAGS) -o $(CLIENT_BIN) $(CLIENT_OBJ) -lncurses
+client: client_bin
+
+server_bin: $(SERVER_OBJS)
+	$(CC) $(CFLAGS) $(SERVER_OBJS) -o server
+
+client_bin: $(CLIENT_OBJS)
+	$(CC) $(CFLAGS) $(CLIENT_OBJS) -lncurses -o client
 
 %.o: %.c
-	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+	$(CC) $(CFLAGS) $(INCS) -c $< -o $@
 
 clean:
-	rm -f $(SERVER_OBJ) $(CLIENT_OBJ) $(SERVER_BIN) $(CLIENT_BIN)
+	rm -f $(SERVER_OBJS) $(CLIENT_OBJS) server client
 
 .PHONY: all server client clean
 

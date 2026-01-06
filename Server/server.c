@@ -1,85 +1,21 @@
-#include "../shared/messages.h"
+#define _POSIX_C_SOURCE 200809L
+#include "server.h"
 #include "../shared/ipc.h"
-
 
 #include <arpa/inet.h>
 #include <errno.h>
 #include <netinet/in.h>
-#include <pthread.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
 
-typedef struct {
-    int fd;
-    uint32_t id;
-    uint8_t active;
-    uint8_t alive;
-    uint8_t last_dir;
-    uint32_t score;
-    uint16_t snake_len;
-    pos_t snake[MAX_SNAKE];
-    pthread_t th;
-} player_t;
-
-typedef struct {
-    int lfd;
-    pthread_mutex_t mtx;
-    player_t players[MAX_PLAYERS];
-    uint32_t next_id;
-    uint8_t lobby;
-    uint8_t start_req;
-    uint8_t restart_req;
-    uint8_t shutdown;
-    uint32_t tick;
-    uint8_t fruit_count;
-    pos_t fruits[MAX_FRUITS];
-} server_t;
-
-static uint64_t now_ms(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)(ts.tv_nsec / 1000000ULL);
-}
-
 static void sleep_ms(uint32_t ms) {
     struct timespec ts;
     ts.tv_sec = ms / 1000;
     ts.tv_nsec = (long)(ms % 1000) * 1000000L;
     nanosleep(&ts, NULL);
-}
-
-static int listen_on(uint16_t port) {
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    int yes = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
-
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    addr.sin_port = htons(port);
-
-    if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) return -1;
-    if (listen(fd, 16) < 0) return -1;
-    return fd;
-}
-
-static int wait_for_join(int cfd) {
-    for (;;) {
-        uint16_t type, len;
-        if (recv_hdr(cfd, &type, &len) != 0) return -1;
-        uint8_t buf[4096];
-        if (len > 0 && recv_all(cfd, buf, len) != 0) return -1;
-        if (type == MSG_JOIN) return 0;
-    }
-}
-
-static int pos_eq(pos_t a, pos_t b) {
-    return a.x == b.x && a.y == b.y;
 }
 
 static int is_opposite(uint8_t a, uint8_t b) {
@@ -89,175 +25,88 @@ static int is_opposite(uint8_t a, uint8_t b) {
            (a == DIR_RIGHT && b == DIR_LEFT);
 }
 
+int server_listen(uint16_t port) {
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return -1;
 
-static int collides(server_t *S, player_t *me, pos_t nh, int grow) {
+    int yes = 1;
+    (void)setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    addr.sin_port = htons(port);
+
+    if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) { close(fd); return -1; }
+    if (listen(fd, 16) < 0) { close(fd); return -1; }
+    return fd;
+}
+
+static void drain_payload(int fd, uint16_t len) {
+    uint8_t buf[512];
+    while (len > 0) {
+        uint16_t chunk = (len > sizeof(buf)) ? (uint16_t)sizeof(buf) : len;
+        if (recv_all(fd, buf, chunk) != 0) break;
+        len = (uint16_t)(len - chunk);
+    }
+}
+
+static int wait_for_join(int cfd) {
+    for (;;) {
+        uint16_t type = 0, len = 0;
+        if (recv_hdr(cfd, &type, &len) != 0) return -1;
+
+        if (type == MSG_JOIN) {
+            if (len > 0) drain_payload(cfd, len);
+            return 0;
+        }
+
+        if (len > 0) drain_payload(cfd, len);
+    }
+}
+
+static void broadcast_state_locked(server_t *S) {
+    state_t st;
+    game_make_state(&S->G, S->players, &st);
+
     for (int i = 0; i < MAX_PLAYERS; i++) {
-        player_t *pl = &S->players[i];
-        if (!pl->active || !pl->alive) continue;
-        for (uint16_t k = 0; k < pl->snake_len; k++) {
-            if (pl == me && !grow && k == pl->snake_len - 1) continue;
-            if (pos_eq(pl->snake[k], nh)) return 1;
+        if (!S->players[i].active) continue;
+        if (send_msg(S->players[i].fd, MSG_STATE, &st, (uint16_t)sizeof(st)) != 0) {
+            close(S->players[i].fd);
+            S->players[i].active = 0;
+            S->players[i].alive = 0;
         }
     }
-    return 0;
-}
-
-static void spawn_fruits(server_t *S) {
-    S->fruit_count = MAX_FRUITS;
-    for (uint8_t i = 0; i < S->fruit_count; i++) {
-        for (;;) {
-            pos_t p = {rand() % WORLD_W, rand() % WORLD_H};
-            int ok = 1;
-            for (int j = 0; j < MAX_PLAYERS; j++) {
-                player_t *pl = &S->players[j];
-                if (!pl->active || !pl->alive) continue;
-                for (uint16_t k = 0; k < pl->snake_len; k++) {
-                    if (pos_eq(pl->snake[k], p)) ok = 0;
-                }
-            }
-            if (ok) { S->fruits[i] = p; break; }
-        }
-    }
-}
-
-static void init_round(server_t *S) {
-    for (int i = 0; i < MAX_PLAYERS; i++) {
-        player_t *pl = &S->players[i];
-        if (!pl->active) continue;
-        pl->alive = 1;
-        pl->last_dir = DIR_RIGHT;
-        pl->snake_len = 4;
-        uint8_t bx = 5, by = 5;
-        if (i == 1) bx = WORLD_W - 6;
-        if (i == 2) by = WORLD_H - 6;
-        if (i == 3) { bx = WORLD_W - 6; by = WORLD_H - 6; }
-        for (int k = 0; k < 4; k++) {
-            pl->snake[k].x = bx - k;
-            pl->snake[k].y = by;
-        }
-    }
-    spawn_fruits(S);
-}
-
-static void move_one(server_t *S, player_t *pl) {
-    pos_t nh = pl->snake[0];
-    if (pl->last_dir == DIR_UP) nh.y--;
-    if (pl->last_dir == DIR_DOWN) nh.y++;
-    if (pl->last_dir == DIR_LEFT) nh.x--;
-    if (pl->last_dir == DIR_RIGHT) nh.x++;
-
-    if (nh.x >= WORLD_W || nh.y >= WORLD_H) { pl->alive = 0; return; }
-
-    int ate = -1;
-    for (uint8_t i = 0; i < S->fruit_count; i++)
-        if (pos_eq(S->fruits[i], nh)) ate = i;
-
-    if (collides(S, pl, nh, ate >= 0)) { pl->alive = 0; return; }
-
-    if (ate >= 0 && pl->snake_len < MAX_SNAKE) {
-        for (int k = pl->snake_len; k > 0; k--) pl->snake[k] = pl->snake[k-1];
-        pl->snake[0] = nh;
-        pl->snake_len++;
-        pl->score += 10;
-        for (;;) {
-          pos_t p = { (uint8_t)(rand() % WORLD_W), (uint8_t)(rand() % WORLD_H) };
-
-          if (p.x >= WORLD_W || p.y >= WORLD_H) continue;
-
-          if (!collides(S, pl, p, 1)) {
-            int clash = 0;
-            for (uint8_t j = 0; j < S->fruit_count; j++) {
-              if ((int)j == ate) continue;
-              if (pos_eq(S->fruits[j], p)) { clash = 1; break; }
-            }
-          if (!clash) {
-            S->fruits[ate] = p;
-            break;
-          }
-        }
-      }    
-    } else {
-        for (int k = pl->snake_len - 1; k > 0; k--) pl->snake[k] = pl->snake[k-1];
-        pl->snake[0] = nh;
-    }
-}
-
-static void broadcast_state(server_t *S) {
-
-  state_t st;
-  memset(&st, 0, sizeof(st));
-
-  st.tick = S->tick;
-  st.w = WORLD_W;
-  st.h = WORLD_H;
-  st.lobby = S->lobby;
-
-  uint8_t pc = 0, ac = 0;
-  for (int i = 0; i < MAX_PLAYERS; i++) {
-      if (S->players[i].active) pc++;
-      if (S->players[i].active && S->players[i].alive) ac++;
-  }
-  st.player_count = pc;
-  st.alive_count = ac;
-  st.round_over = (!S->lobby && ac == 0) ? 1 : 0;
-
-  st.fruit_count = S->fruit_count;
-  for (uint8_t i = 0; i < st.fruit_count; i++) st.fruits[i] = S->fruits[i];
-
-  for (int i = 0; i < MAX_PLAYERS; i++) {
-    player_t *pl = &S->players[i];
-    player_state_t *ps = &st.players[i];
-
-    ps->id = pl->id;
-    ps->active = pl->active;
-    ps->alive = pl->alive;
-    ps->score = pl->score;
-    ps->len = pl->snake_len;
-
-    for (uint16_t k = 0; k < pl->snake_len && k < MAX_SNAKE; k++) {
-        ps->seg[k] = pl->snake[k];
-    }
-  }
-
-  for (int i = 0; i < MAX_PLAYERS; i++) {
-    if (S->players[i].active){
-      send_msg(S->players[i].fd, MSG_STATE, &st, sizeof(st));
-    }
-  }
 }
 
 static void* client_thread(void *arg) {
-    struct { server_t *S; int i; } *P = arg;
+    struct { server_t *S; int i; } *P = (void*)arg;
     server_t *S = P->S;
     int i = P->i;
     free(P);
 
     for (;;) {
-        uint16_t type, len;
+        uint16_t type = 0, len = 0;
         if (recv_hdr(S->players[i].fd, &type, &len) != 0) break;
 
-        uint8_t buf[64];
-        if (len > sizeof(buf)) break;
-        if (len > 0 && recv_all(S->players[i].fd, buf, len) != 0) break;
-
         if (type == MSG_INPUT) {
-            if (len != sizeof(input_t)) continue;
-
+            if (len != sizeof(input_t)) { if (len) drain_payload(S->players[i].fd, len); continue; }
             input_t in;
-            memcpy(&in, buf, sizeof(in));
+            if (recv_all(S->players[i].fd, &in, (uint16_t)sizeof(in)) != 0) break;
 
             pthread_mutex_lock(&S->mtx);
 
             if (S->players[i].active) {
                 if (in.dir <= DIR_RIGHT) {
-                  uint8_t cur = S->players[i].last_dir;
-
-                  if (S->players[i].snake_len <= 1 || !is_opposite(cur, in.dir)) {
-                  S->players[i].last_dir = in.dir;
-                  }
+                    uint8_t cur = S->players[i].last_dir;
+                    if (S->players[i].snake_len <= 1 || !is_opposite(cur, in.dir)) {
+                        S->players[i].last_dir = in.dir;
+                    }
                 }
-                if (in.action == ACT_START)   S->start_req = 1;
-                if (in.action == ACT_RESTART) S->restart_req = 1;
+
+                if (in.action == ACT_START)   S->G.start_req = 1;
+                if (in.action == ACT_RESTART) S->G.restart_req = 1;
 
                 if (in.action == ACT_QUIT) {
                     pthread_mutex_unlock(&S->mtx);
@@ -266,15 +115,36 @@ static void* client_thread(void *arg) {
             }
 
             pthread_mutex_unlock(&S->mtx);
-        }  
+        } else if (type == MSG_CREATE) {
+            if (len != sizeof(create_game_t)) { if (len) drain_payload(S->players[i].fd, len); continue; }
+            create_game_t cfg;
+            if (recv_all(S->players[i].fd, &cfg, (uint16_t)sizeof(cfg)) != 0) break;
+
+            pthread_mutex_lock(&S->mtx);
+            if (S->players[i].active && S->players[i].id == S->host_id) {
+                game_apply_config(&S->G, &cfg);
+            }
+            pthread_mutex_unlock(&S->mtx);
+        } else {
+            if (len) drain_payload(S->players[i].fd, len);
+        }
     }
 
     pthread_mutex_lock(&S->mtx);
-
     if (S->players[i].active) {
         close(S->players[i].fd);
         S->players[i].active = 0;
         S->players[i].alive = 0;
+
+        if (S->host_id == S->players[i].id) {
+            S->host_id = 0;
+            for (int k = 0; k < MAX_PLAYERS; k++) {
+                if (S->players[k].active) {
+                    S->host_id = S->players[k].id;
+                    break;
+                }
+            }
+        }
     }
     pthread_mutex_unlock(&S->mtx);
 
@@ -282,94 +152,147 @@ static void* client_thread(void *arg) {
 }
 
 static void* accept_thread(void *arg) {
-    server_t *S = arg;
-    while (!S->shutdown) {
-        int cfd = accept(S->lfd, NULL, NULL);
-        if (cfd < 0) continue;
+    server_t *S = (server_t*)arg;
+
+    while (1) {
+        pthread_mutex_lock(&S->mtx);
+        uint8_t shut = S->shutdown;
+        int lfd = S->lfd;
+        pthread_mutex_unlock(&S->mtx);
+        if (shut) break;
+
+        int cfd = accept(lfd, NULL, NULL);
+        if (cfd < 0) {
+            if (errno == EINTR) continue;
+            continue;
+        }
+
         if (wait_for_join(cfd) != 0) { close(cfd); continue; }
 
         pthread_mutex_lock(&S->mtx);
+
         int slot = -1;
-        for (int i = 0; i < MAX_PLAYERS; i++)
+        for (int i = 0; i < MAX_PLAYERS; i++) {
             if (!S->players[i].active) { slot = i; break; }
-        if (slot >= 0) {
-            S->players[slot].fd = cfd;
-            S->players[slot].id = S->next_id++;
-            S->players[slot].active = 1;
-            S->players[slot].alive = 0;
-            join_ok_t ok = { S->players[slot].id };
-            send_msg(cfd, MSG_JOIN_OK, &ok, sizeof(ok));
-            struct { server_t *S; int i; } *P = malloc(sizeof(*P));
-            P->S = S; P->i = slot;
-            pthread_create(&S->players[slot].th, NULL, client_thread, P);
-            pthread_detach(S->players[slot].th);
-        } else close(cfd);
+        }
+
+        if (slot < 0) {
+            pthread_mutex_unlock(&S->mtx);
+            close(cfd);
+            continue;
+        }
+
+        S->players[slot].fd = cfd;
+        S->players[slot].id = S->next_id++;
+        S->players[slot].active = 1;
+        S->players[slot].alive = 0;
+        S->players[slot].last_dir = DIR_RIGHT;
+        S->players[slot].score = 0;
+        S->players[slot].snake_len = 0;
+
+        uint8_t is_host = 0;
+        if (S->host_id == 0) {
+            S->host_id = S->players[slot].id;
+            is_host = 1;
+        }
+
+        join_ok_t ok;
+        ok.player_id = S->players[slot].id;
+        ok.is_host = is_host;
+        (void)send_msg(cfd, MSG_JOIN_OK, &ok, (uint16_t)sizeof(ok));
+
+        struct { server_t *S; int i; } *P = malloc(sizeof(*P));
+        if (P) {
+            P->S = S;
+            P->i = slot;
+            if (pthread_create(&S->players[slot].th, NULL, client_thread, P) == 0) {
+                pthread_detach(S->players[slot].th);
+            } else {
+                free(P);
+                close(cfd);
+                S->players[slot].active = 0;
+                S->players[slot].alive = 0;
+            }
+        }
+
         pthread_mutex_unlock(&S->mtx);
     }
+
     return NULL;
 }
 
-static void* cmd_thread(void *arg) {
-    server_t *S = arg;
-    for (;;) {
-        int c = getchar();
-        if (c == 'g') S->start_req = 1;
-        if (c == 'r') S->restart_req = 1;
-        if (c == 'q') { S->shutdown = 1; close(S->lfd); break; }
+void server_init(server_t *S, uint16_t port, uint8_t w, uint8_t h) {
+    (void)w; (void)h;
+    memset(S, 0, sizeof(*S));
+    pthread_mutex_init(&S->mtx, NULL);
+
+    S->next_id = 1;
+    S->lfd = server_listen(port);
+
+    game_init(&S->G);
+
+    for (int i = 0; i < MAX_PLAYERS; i++) {
+        S->players[i].active = 0;
+        S->players[i].alive = 0;
+        S->players[i].fd = -1;
     }
-    return NULL;
 }
 
-int main(int argc, char **argv) {
+void server_run(server_t *S) {
+    pthread_t acc;
+    pthread_create(&acc, NULL, accept_thread, S);
 
-    (void)argc;
-    server_t S;
-    memset(&S, 0, sizeof(S));
-    pthread_mutex_init(&S.mtx, NULL);
-    srand(time(NULL));
+    uint64_t next_tick = now_ms();
 
-    S.lfd = listen_on(atoi(argv[1]));
-    S.lobby = 1;
+    while (1) {
+        pthread_mutex_lock(&S->mtx);
 
-    pthread_t acc, cmd;
-    pthread_create(&acc, NULL, accept_thread, &S);
-    pthread_create(&cmd, NULL, cmd_thread, &S);
+        uint8_t shut = S->shutdown;
 
-    uint64_t next = now_ms();
-    while (!S.shutdown) {
-        if (now_ms() >= next) {
-            next += 100;
-            S.tick++;
-            int alive = 0, active_cnt = 0;
-            for (int i = 0; i < MAX_PLAYERS; i++) {
-              if (S.players[i].active) active_cnt++;
-              if (S.players[i].active && S.players[i].alive) alive++;
+        int active_cnt = 0, alive_cnt = 0;
+        for (int i = 0; i < MAX_PLAYERS; i++) {
+            if (S->players[i].active) active_cnt++;
+            if (S->players[i].active && S->players[i].alive) alive_cnt++;
+        }
+
+        if (S->G.lobby && S->G.start_req && active_cnt > 0) {
+            S->G.lobby = 0;
+            S->G.start_req = 0;
+            game_init_round(&S->G, S->players);
+        } else {
+            S->G.start_req = 0;
+        }
+
+        uint64_t now = now_ms();
+        if (now >= next_tick) {
+            next_tick += 100;
+            S->G.tick++;
+
+            if (!S->G.lobby) {
+                game_move_all(&S->G, S->players);
             }
 
-        if (S.lobby && S.start_req && active_cnt > 0) {
-          S.lobby = 0;
-          S.start_req = 0;
-          init_round(&S);
+            broadcast_state_locked(S);
         }
 
-        if (!S.lobby && alive == 0) {
-          S.lobby = 1;
-          S.start_req = 0;
-          S.restart_req = 0;
+        alive_cnt = 0;
+        for (int i = 0; i < MAX_PLAYERS; i++) {
+            if (S->players[i].active && S->players[i].alive) alive_cnt++;
         }
 
-        if (!S.lobby) {
-          for (int i = 0; i < MAX_PLAYERS; i++){
-            if (S.players[i].alive) move_one(&S, &S.players[i]);
-          }
+        if (!S->G.lobby && alive_cnt == 0) {
+            S->G.lobby = 1;
+            S->G.start_req = 0;
+            S->G.restart_req = 0;
         }
 
-        broadcast_state(&S);
-        } else sleep_ms(5);
+        pthread_mutex_unlock(&S->mtx);
+
+        if (shut) break;
+
+        sleep_ms(5);
     }
 
     pthread_join(acc, NULL);
-    pthread_join(cmd, NULL);
-    close(S.lfd);
-    return 0;
 }
+
