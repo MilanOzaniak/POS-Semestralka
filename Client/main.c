@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <stdio.h>
 
 static void sleep_ms(uint32_t ms) {
     struct timespec ts;
@@ -25,36 +26,32 @@ int main(int argc, char **argv) {
     const char *ip = argv[1];
     uint16_t port = (uint16_t)atoi(argv[2]);
 
+    client_t C;
+    if (client_connect(&C, ip, port) != 0) {
+        return 1;
+    }
+
+    if (client_start_recv(&C) != 0) {
+        client_close(&C);
+        return 1;
+    }
+
+    if (C.is_host) {
+        menu_result_t res;
+        if (!menu_run(&res, 1)) {
+            client_send_action(&C, ACT_QUIT);
+            client_close(&C);
+            return 0;
+        }
+        send_msg(C.fd, MSG_CREATE, &res.cfg, sizeof(res.cfg));
+    }
+
     initscr();
     cbreak();
     noecho();
     keypad(stdscr, TRUE);
     nodelay(stdscr, TRUE);
     curs_set(0);
-
-    client_t C;
-    if (client_connect(&C, ip, port) != 0) {
-        endwin();
-        return 1;
-    }
-
-    if (client_start_recv(&C) != 0) {
-        endwin();
-        return 1;
-    }
-
-    uint8_t is_host = C.is_host;
-
-    if (is_host) {
-        menu_result_t res;
-        if (!menu_run(&res, 1)) {
-            client_send_action(&C, ACT_QUIT);
-            client_close(&C);
-            endwin();
-            return 0;
-        }
-        send_msg(C.fd, MSG_CREATE, &res.cfg, sizeof(res.cfg));
-    }
 
     int running = 1;
 
@@ -98,5 +95,3 @@ int main(int argc, char **argv) {
     client_close(&C);
     return 0;
 }
-
-

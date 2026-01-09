@@ -36,7 +36,7 @@ void draw(const state_t *st, uint32_t my_id) {
 
     if (st->lobby) {
         mvprintw(oy + H + 1, 0, "Lobby: press 'g' to start. Join more players anytime.");
-        mvprintw(oy + H + 2, 0, "Controls: arrows/WASD move | g start | r restart | q quit");
+        mvprintw(oy + H + 2, 0, "Controls: arrows/WASD move | g start | q quit");
     } else if (st->round_over) {
         mvprintw(oy + H + 1, 0, "Round over. Back to lobby.");
         mvprintw(oy + H + 2, 0, "Controls: g start | q quit");

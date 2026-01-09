@@ -93,9 +93,8 @@ void game_apply_config(game_t *G, const create_game_t *cfg) {
     map_clear(&G->map, w, h);
 
     if (cfg->obstacles) {
-        if (cfg->map_type == MAP_RANDOM) {
-            map_random_obstacles(&G->map, (uint32_t)now_ms(), cfg->obstacle_density);
-        }
+      map_random_obstacles(&G->map, (uint32_t)now_ms(), cfg->obstacle_density);
+        
     }
 
     G->lobby = 1;
