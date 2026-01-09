@@ -16,6 +16,10 @@ static void put_cell(int oy, int ox, uint8_t x, uint8_t y, char ch) {
 void draw(const state_t *st, uint32_t my_id) {
     erase();
 
+
+
+
+
     mvprintw(0, 0, "Players: %u alive: %u  tick:%u  %s%s",
              st->player_count, st->alive_count, st->tick,
              st->lobby ? "LOBBY" : "GAME",
@@ -44,6 +48,12 @@ void draw(const state_t *st, uint32_t my_id) {
         mvprintw(oy + H + 1, 0, "Controls: arrows/WASD move | q quit");
     }
 
+    for (uint8_t y = 0; y < st->h; y++) {
+      for (uint8_t x = 0; x < st->w; x++) {
+        if (st->blocks[y][x]) put_cell(oy, ox, x, y, '#');
+      }
+    }
+
     for (uint8_t i = 0; i < st->fruit_count; i++) {
         put_cell(oy, ox, st->fruits[i].x, st->fruits[i].y, 'o');
     }
@@ -54,8 +64,7 @@ void draw(const state_t *st, uint32_t my_id) {
 
         int is_me = (p->id == my_id);
 
-        mvprintw(1, 0 + i*18, "P%d id=%u %s sc=%u",
-                 i+1, p->id, p->alive ? "ALIVE" : "DEAD ", p->score);
+        mvprintw(1, 0 + i*18, "P%d %s sc=%u", i+1, p->alive ? "ALIVE" : "DEAD ", p->score);
 
         if (!p->alive) continue;
 

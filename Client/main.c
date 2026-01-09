@@ -9,6 +9,9 @@
 #include <string.h>
 #include <time.h>
 #include <stdio.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 static void sleep_ms(uint32_t ms) {
     struct timespec ts;
@@ -17,14 +20,39 @@ static void sleep_ms(uint32_t ms) {
     nanosleep(&ts, NULL);
 }
 
+static int start_server(uint16_t port) {
+    pid_t pid = fork();
+    if (pid < 0) return -1;
+
+    if (pid == 0) {
+        char port_str[16];
+        snprintf(port_str, sizeof(port_str), "%u", port);
+
+        execl("./server", "./server", port_str, NULL);
+        _exit(1);
+    }
+
+    return 0;
+}
+
 int main(int argc, char **argv) {
     if (argc != 3) {
-        fprintf(stderr, "Usage: %s <ip> <port>\n", argv[0]);
+        fprintf(stderr, "Usage: %s <ip|host> <port>\n", argv[0]);
         return 1;
     }
 
-    const char *ip = argv[1];
+    const char *arg = argv[1];
     uint16_t port = (uint16_t)atoi(argv[2]);
+    const char *ip = arg;
+
+    if (strcmp(arg, "host") == 0) {
+        if (start_server(port) != 0) {
+            fprintf(stderr, "Failed to start server\n");
+            return 1;
+        }
+        ip = "127.0.0.1";
+        sleep(1); 
+    }
 
     client_t C;
     if (client_connect(&C, ip, port) != 0) {

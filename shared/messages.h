@@ -80,6 +80,8 @@ typedef struct __attribute__((packed)) {
     uint8_t  w;
     uint8_t  h;
 
+    uint8_t blocks[WORLD_H][WORLD_W];
+
     uint8_t  lobby;
     uint8_t  round_over;
 

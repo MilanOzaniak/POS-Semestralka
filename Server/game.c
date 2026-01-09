@@ -181,6 +181,13 @@ void game_make_state(const game_t *G, const player_t players[MAX_PLAYERS], state
     out->h = G->map.h;
     out->lobby = G->lobby;
 
+    memset(out->blocks, 0, sizeof(out->blocks));
+      for (uint8_t y = 0; y < G->map.h; y++) {
+         for (uint8_t x = 0; x < G->map.w; x++) {
+            out->blocks[y][x] = G->map.blocks[y][x];
+        }
+      }
+
     uint8_t pc = 0, ac = 0;
     for (int i = 0; i < MAX_PLAYERS; i++) {
         if (players[i].active) pc++;

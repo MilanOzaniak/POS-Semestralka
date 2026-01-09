@@ -18,15 +18,31 @@ static uint32_t xorshift32(uint32_t *s) {
     return x;
 }
 
-void map_random_obstacles(map_t *m, uint32_t seed, uint8_t density_pct) {
-    if (density_pct > 60) density_pct = 60;
+void map_random_obstacles(map_t *m, uint32_t seed, uint8_t count) {
     uint32_t s = seed ? seed : 2463534242u;
 
-    for (uint8_t y = 0; y < m->h; y++) {
-        for (uint8_t x = 0; x < m->w; x++) {
-            uint32_t r = xorshift32(&s) % 100u;
-            m->blocks[y][x] = (r < density_pct) ? 1 : 0;
+    for (uint8_t y = 0; y < m->h; y++)
+        for (uint8_t x = 0; x < m->w; x++)
+            m->blocks[y][x] = 0;
+
+    uint32_t max = (uint32_t)m->w * (uint32_t)m->h;
+    if (count > max) count = (uint8_t)max;
+
+    uint32_t placed = 0;
+    uint32_t tries = 0;
+
+    while (placed < count && tries < max * 10) {
+        uint32_t r = xorshift32(&s);
+        uint8_t x = (uint8_t)(r % m->w);
+        uint8_t y = (uint8_t)((r / m->w) % m->h);
+
+        if (m->blocks[y][x]) {
+            tries++;
+            continue;
         }
+
+        m->blocks[y][x] = 1;
+        placed++;
     }
 
     pos_t sp[4] = {

@@ -55,7 +55,7 @@ int menu_run(menu_result_t *out, uint8_t is_host) {
             case 3:
                 cfg.obstacles = !cfg.obstacles;
                 if (cfg.obstacles) {
-                    cfg.obstacle_density = read_int("Obstacle density (0-60): ", cfg.obstacle_density);
+                    cfg.obstacle_density = read_int("Obstacle count (0-60): ", cfg.obstacle_density);
                 }
                 clear_screen();
                 break;
