@@ -13,6 +13,8 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+
+// cca 60 fps
 static void sleep_ms(uint32_t ms) {
     struct timespec ts;
     ts.tv_sec = ms / 1000;
@@ -20,6 +22,7 @@ static void sleep_ms(uint32_t ms) {
     nanosleep(&ts, NULL);
 }
 
+// spusti server, ked klient bezi ako host
 static int start_server(uint16_t port) {
     pid_t pid = fork();
     if (pid < 0) return -1;
@@ -45,6 +48,7 @@ int main(int argc, char **argv) {
     uint16_t port = (uint16_t)atoi(argv[2]);
     const char *ip = arg;
 
+    // ak je host
     if (strcmp(arg, "host") == 0) {
         if (start_server(port) != 0) {
             fprintf(stderr, "Failed to start server\n");
@@ -53,12 +57,15 @@ int main(int argc, char **argv) {
         ip = "127.0.0.1";
         sleep(1); 
     }
-
+    
+    // pripojenie na server
     client_t C;
     if (client_connect(&C, ip, port) != 0) {
         return 1;
     }
 
+
+    // spustenie recv threadu, prijimanie sprav zo servera
     if (client_start_recv(&C) != 0) {
         client_close(&C);
         return 1;
@@ -66,30 +73,35 @@ int main(int argc, char **argv) {
 
     if (C.is_host) {
         menu_result_t res;
+        // vypnutie 
         if (!menu_run(&res, 1)) {
             client_send_action(&C, ACT_QUIT);
             client_close(&C);
             return 0;
         }
-        send_msg(C.fd, MSG_CREATE, &res.cfg, sizeof(res.cfg));
+        send_msg(C.fd, MSG_CREATE, &res.cfg, sizeof(res.cfg)); // poslanie serveru spravu s konfiguraciou hry
     }
 
     initscr();
-    cbreak();
-    noecho();
-    keypad(stdscr, TRUE);
-    nodelay(stdscr, TRUE);
-    curs_set(0);
+    cbreak(); // citame hned klavesy, povolenie getch()
+    noecho(); // nepiseme stlacene klavesy na obrazovku
+    keypad(stdscr, TRUE); // mozeme citat sipky
+    nodelay(stdscr, TRUE); // 
+    curs_set(0); // vypneme kurzor
 
     int running = 1;
-
+    
+    // hlavny loop clienta
     while (running) {
         state_t st;
-        uint8_t has = 0, disc = 0;
-
+        uint8_t has = 0; // ked 1 tak mozeme kreslit
+        uint8_t disc = 0; // ked 1 tak sme dissconnected
+        
+        // vytiahne posledny state
         client_get_state(&C, &st, &has, &disc);
         if (disc) break;
-
+        
+        // citanie z klavesnice getch() povolene
         int ch = getch();
         if (ch != ERR) {
             switch (ch) {
@@ -114,11 +126,13 @@ int main(int argc, char **argv) {
                     break;
             }
         }
-
+        
+        // ak je platny state tak ho vykreslime
         if (has) draw(&st, C.my_id);
         sleep_ms(16);
     }
-
+    
+    // upratenie ncurses a spojenia
     endwin();
     client_close(&C);
     return 0;

@@ -3,6 +3,8 @@
 #include <string.h>
 #include <stdlib.h>
 
+
+// citanie vstupu
 static int read_int(const char *prompt, int def) {
     char buf[64];
     printf("%s", prompt);
@@ -10,6 +12,7 @@ static int read_int(const char *prompt, int def) {
     return atoi(buf);
 }
 
+// vycistenie terminalu
 static void clear_screen(void) {
     printf("\033[2J\033[H");
     fflush(stdout);
@@ -18,7 +21,8 @@ static void clear_screen(void) {
 int menu_run(menu_result_t *out, uint8_t is_host) {
     create_game_t cfg;
     memset(&cfg, 0, sizeof(cfg));
-
+    
+    // zakladne nastavenia
     cfg.w = WORLD_W;
     cfg.h = WORLD_H;
     cfg.map_type = MAP_EMPTY;
@@ -27,11 +31,13 @@ int menu_run(menu_result_t *out, uint8_t is_host) {
     cfg.time_limit = 120;
     cfg.obstacle_density = 18;
 
+    // menu sa zobrazuje iba hostovi
     if (!is_host) {
         out->cfg = cfg;
         return 1;
     }
 
+    
     for (;;) {
         printf("\n=== New Game Setup (host) ===\n\n");
         printf("1) Width: %u\n", cfg.w);
